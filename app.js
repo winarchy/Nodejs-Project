@@ -1,39 +1,76 @@
-const http = require("http");
-const fs = require("fs");
+const path = require("path");
 
-const server = http.createServer((req, res) => {
-  const url = req.url;
-  const method = req.method;
-  if (url === "/") {
-    res.write("<html>");
-    res.write("<head><title>Enter Message</title><head>");
-    res.write(
-      '<body><form action="/message" method="POST"><input type="text" name="message"><button type="submit">Send</button></form></body>'
-    );
-    res.write("</html>");
-    return res.end();
+const express = require("express");
+const bodyParser = require("body-parser");
+const mongoose = require("mongoose");
+const session = require("express-session");
+const MongoDBStore = require("connect-mongodb-session")(session);
+const csrf = require("csurf");
+const flash = require('connect-flash')
+
+const errorController = require("./controllers/error");
+const User = require("./models/user");
+
+const MONGODB_URI =
+  "mongodb+srv://viapossulistiyo:KiyFxO69cfUaN4PA@node-js-mongoose-2024.9bv8vwf.mongodb.net/shop";
+
+const app = express();
+const store = new MongoDBStore({
+  uri: MONGODB_URI,
+  collection: "sessions",
+});
+const csrfProtection = csrf();
+
+app.set("view engine", "ejs");
+app.set("views", "views");
+
+const adminRoutes = require("./routes/admin");
+const shopRoutes = require("./routes/shop");
+const authRoutes = require("./routes/auth");
+
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(express.static(path.join(__dirname, "public")));
+app.use(
+  session({
+    secret: "my secret",
+    resave: false,
+    saveUninitialized: false,
+    store: store,
+  })
+);
+app.use(csrfProtection);
+app.use(flash())
+
+app.use((req, res, next) => {
+  if (!req.session.user) {
+    return next();
   }
-  if (url === "/message" && method === "POST") {
-    const body = [];
-    req.on("data", (chunk) => {
-      console.log(chunk);
-      body.push(chunk);
-    });
-    req.on("end", () => {
-      const parsedBody = Buffer.concat(body).toString();
-      const message = parsedBody.split("=")[1];
-      fs.writeFileSync("message.txt", message);
-    });
-    res.statusCode = 302;
-    res.setHeader("Location", "/");
-    return res.end();
-  }
-  res.setHeader("Content-Type", "text/html");
-  res.write("<html>");
-  res.write("<head><title>My First Page</title><head>");
-  res.write("<body><h1>Hello from my Node.js Server!</h1></body>");
-  res.write("</html>");
-  res.end();
+  User.findById(req.session.user._id)
+    .then((user) => {
+      req.user = user;
+      next();
+    })
+    .catch((err) => console.log(err));
 });
 
-server.listen(3000);
+app.use((req, res, next) => {
+  res.locals.isAuthenticated = req.session.isLoggedIn;
+  res.locals.csrfToken = req.csrfToken();
+  next();
+});
+
+app.use("/admin", adminRoutes);
+app.use(shopRoutes);
+app.use(authRoutes);
+
+app.use(errorController.get404);
+
+mongoose
+  .connect(MONGODB_URI)
+  .then((result) => {
+    console.log("Connect");
+    app.listen(3000);
+  })
+  .catch((err) => {
+    console.log(err);
+  });
